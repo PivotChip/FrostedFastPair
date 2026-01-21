@@ -8,6 +8,10 @@ You can use ESP32 device to track down devices that support Fast Pair and check 
 
 ![Image POC](/poc_marshal.jpg)
 
+Interested in penetration testing and security devices? Visit
+
+https://pivotchip.ca
+
 ## Core Logic & Protocol
 
 ### 1. Discovery & Filtering
@@ -65,3 +69,4 @@ https://codeload.github.com/Freenove/Freenove_ESP32_S3_Display/zip/refs/heads/ma
 
 * **Scanning:** Toggle `SCAN` to populate the list. 
 * **Targeting:** Tap an entry to initiate the WhisperPair test. 
+
