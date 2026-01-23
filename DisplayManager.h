@@ -30,6 +30,7 @@ struct DeviceDisplayInfo {
     bool isVulnerable;
     bool isFastPair;
     int rssi;
+    uint32_t lastSeen; 
     String modelId; 
 };
 
@@ -252,14 +253,17 @@ public:
             }
             
             if (barRedraw) {
-                // Clear bar background area only
                 tft->fillRect(x + w - 35, entryY + 5, 30, 6, C_LIST_BG);
                 
-                int barW = map(constrain(dev.rssi, -100, -40), -100, -40, 5, 30);
-                uint16_t barC = (dev.rssi > -70) ? TFT_GREEN : (dev.rssi > -85) ? TFT_YELLOW : TFT_RED;
-                tft->fillRect(x + w - 35, entryY + 5, barW, 5, barC);
+                // [PATCH] Check Stale (>10s)
+                if (millis() - dev.lastSeen > 10000) {
+                    tft->drawRect(x + w - 35, entryY + 5, 30, 6, TFT_DARKGREY);
+                } else {
+                    int barW = map(constrain(dev.rssi, -100, -40), -100, -40, 5, 30);
+                    uint16_t barC = (dev.rssi > -70) ? TFT_GREEN : (dev.rssi > -85) ? TFT_YELLOW : TFT_RED;
+                    tft->fillRect(x + w - 35, entryY + 5, barW, 5, barC);
+                }
                 
-                // Update RSSI in cache
                 cached.rssi = dev.rssi;
             }
         }

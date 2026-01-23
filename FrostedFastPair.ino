@@ -135,6 +135,7 @@ void loop() {
             info.isVulnerable = d.isVulnerable;
             info.isFastPair = d.isFastPair;
             info.rssi = d.rssi;
+            info.lastSeen = d.lastSeen;
             info.modelId = d.modelId; 
             uiDevs.push_back(info);
         }
