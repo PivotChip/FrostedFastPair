@@ -15,19 +15,19 @@ https://pivotchip.ca
 ## Core Logic & Protocol
 
 ### 1. Discovery & Filtering
-[cite_start]The scanner (`BleManager`) bypasses standard discovery to parse raw advertisement packets for GFPS payloads[cite: 2]:
+The scanner (`BleManager`) bypasses standard discovery to parse raw advertisement packets for GFPS payloads
 * **Fast Pair:** Service UUID `0xFE2C`.
 * **Nearby:** Service UUID `0xFEF3`.
 * **Model ID Extraction:** Parses the 3-byte Model ID from Service Data to track devices across MAC address rotations.
 
 ### 2. State Management (Deduplication)
-[cite_start]To handle privacy-enabled BLE devices that rotate MAC addresses, the system uses a tiered identity check[cite: 2]:
+To handle privacy-enabled BLE devices that rotate MAC addresses, the system uses a tiered identity check
 1.  **MAC Match:** Checks strict raw address equality.
 2.  **Identity Match:** If MAC differs, correlates via `Model ID` or `Device Name`.
 3.  **Hot-Swap:** Updates the stored MAC address in real-time when a known identity broadcasts from a new address, preventing connection failures during tests.
 
 ### 3. KBP Handshake Exploitation
-[cite_start]The `testDevice` function executes a raw GFPS handshake to test for unauthorized pairing acceptance[cite: 2]:
+The `testDevice` function executes a raw GFPS handshake to test for unauthorized pairing acceptance
 
 1.  **Connection:** Establishes GATT connection with an 8-second timeout.
 2.  **Service Resolution:** Locates Fast Pair Service (`0xFE2C`) and KBP Characteristic (`fe2c1234-8366-4814-8eb0-01de32100bea`).
