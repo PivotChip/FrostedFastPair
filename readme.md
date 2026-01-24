@@ -4,9 +4,13 @@ POC for **CVE-2025-36911**
 
 **Working on:** Freenove ESP32-S3 ESP32 S3 Display CYD 2.8 Inch IPS Capacitive Touch Screen 240x320 Pixel
 
+[![Watch the video](https://img.youtube.com/vi/pDZJA90SBy4/0.jpg)](https://youtu.be/pDZJA90SBy4)
+
 You can use ESP32 device to track down devices that support Fast Pair and check vulneravility. 
 
 ![Image POC](/poc_marshal.jpg)
+
+# Company 
 
 Interested in penetration testing and security devices? Visit
 
@@ -69,4 +73,5 @@ https://codeload.github.com/Freenove/Freenove_ESP32_S3_Display/zip/refs/heads/ma
 
 * **Scanning:** Toggle `SCAN` to populate the list. 
 * **Targeting:** Tap an entry to initiate the WhisperPair test. 
+
 
