@@ -1,10 +1,16 @@
 # About
 
-POC for **CVE-2025-36911**
+POC for **CVE-2025-36911** WhisperPair vulnerability, allowing you to connect to supported devices with no authentication info.
 
-**Working on:** Freenove ESP32-S3 ESP32 S3 Display CYD 2.8 Inch IPS Capacitive Touch Screen 240x320 Pixel
+This firmware only performs discovery and vulnerability confirmation and does not implement complete pairing or audio listening.
+
+**Tested on Device:** Freenove ESP32-S3 ESP32 S3 Display CYD 2.8 Inch IPS Capacitive Touch Screen 240x320 Pixel
+
+# Video
 
 [![Watch the video](https://img.youtube.com/vi/pDZJA90SBy4/0.jpg)](https://youtu.be/pDZJA90SBy4)
+
+# About the Device
 
 You can use ESP32 device to track down devices that support Fast Pair and check vulneravility. 
 
@@ -73,5 +79,6 @@ https://codeload.github.com/Freenove/Freenove_ESP32_S3_Display/zip/refs/heads/ma
 
 * **Scanning:** Toggle `SCAN` to populate the list. 
 * **Targeting:** Tap an entry to initiate the WhisperPair test. 
+
 
 
