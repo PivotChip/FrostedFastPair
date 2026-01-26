@@ -22,12 +22,13 @@
 #define HEAD_H      40  
 #define SPLIT_X     160 
 #define LIST_ITEM_H 60  
-#define LOG_MAX     10
+#define LOG_MAX     13
 
 struct DeviceDisplayInfo {
     String address;
     String name;
     bool isVulnerable;
+    bool isPaired;
     bool isFastPair;
     int rssi;
     uint32_t lastSeen; 
@@ -41,7 +42,7 @@ private:
     bool ready = false;
     
     std::vector<String> logs;
-    std::vector<DeviceDisplayInfo> device_cache; // Cache for smart redraw
+    std::vector<DeviceDisplayInfo> device_cache; 
     int scrollOffset = 0;
     
     // Button Coordinates (Scan)
@@ -51,7 +52,7 @@ private:
     int btnScanH = 30;
 
     // Button Coordinates (Aggressive)
-    int btnAggrX = 165; // Positioned to the left of Scan button
+    int btnAggrX = 165; 
     int btnAggrY = 5;
     int btnAggrW = 70;
     int btnAggrH = 30;
@@ -59,7 +60,6 @@ private:
     int lastTouchY = -1;
     unsigned long lastHeaderDraw = 0;
     bool lastScanState = false;
-    bool lastAggrState = false; 
 
 public:
     void begin(TFT_eSPI* _tft, FT6336U* _ts) {
@@ -72,7 +72,10 @@ public:
     }
 
     void log(String msg) {
-        if (logs.size() >= LOG_MAX) logs.erase(logs.begin());
+        // Enforce strict size limit
+        if (logs.size() >= LOG_MAX) {
+            logs.erase(logs.begin());
+        }
         logs.push_back(msg);
         drawLogWindow();
     }
@@ -84,8 +87,7 @@ public:
     }
     
     void drawHeader(bool isScanning, int vulnCount, bool isAggressive) {
-        // Force button redraw logic to prevent UI de-sync
-        bool stateChanged = (isScanning != lastScanState) || (isAggressive != lastAggrState);
+        bool stateChanged = (isScanning != lastScanState);
         bool timeRefresh = (millis() - lastHeaderDraw > 1000);
 
         if (stateChanged || timeRefresh) {
@@ -98,18 +100,7 @@ public:
             tft->setTextDatum(MC_DATUM);
             tft->drawString(btnText, btnScanX + btnScanW/2, btnScanY + btnScanH/2);
 
-            // Draw Aggressive Button
-            //uint16_t aggrColor = isAggressive ? TFT_RED : TFT_DARKGREY;
-            //String aggrText = isAggressive ? "AGGR ON" : "AGGR OFF";
-
-            //tft->fillRoundRect(btnAggrX, btnAggrY, btnAggrW, btnAggrH, 5, aggrColor);
-            //tft->setTextColor(TFT_WHITE, aggrColor);
-            //tft->setTextDatum(MC_DATUM);
-            //tft->drawString(aggrText, btnAggrX + btnAggrW/2, btnAggrY + btnAggrH/2);
-            
-            // Only update these if we actually drew
             lastScanState = isScanning;
-            //lastAggrState = isAggressive;
             lastHeaderDraw = millis();
         }
 
@@ -120,21 +111,18 @@ public:
     }
 
     void drawLogWindow() {
-        // Clear log area
         tft->fillRect(0, HEAD_H + 1, SPLIT_X - 1, SCREEN_HEIGHT - HEAD_H, C_BG);
         tft->setTextDatum(TL_DATUM);
         tft->setTextColor(C_LOG_TXT, C_BG);
         
         int y = HEAD_H + 5;
-        int maxW = SPLIT_X - 10; // Margin
+        int maxW = SPLIT_X - 10; 
         
         for(const auto& line : logs) {
             if (tft->textWidth(line) <= maxW) {
-                // Fits on one line
                 tft->drawString(line, 5, y);
                 y += 15;
             } else {
-                // Needs wrapping
                 String currentLine = "";
                 for (int i = 0; i < line.length(); i++) {
                     if (tft->textWidth(currentLine + line[i]) > maxW) {
@@ -144,13 +132,11 @@ public:
                     }
                     currentLine += line[i];
                 }
-                // Draw remaining text
                 if (currentLine.length() > 0) {
                     tft->drawString(currentLine, 5, y);
                     y += 15;
                 }
             }
-            // Stop drawing if we run off screen
             if (y > SCREEN_HEIGHT) break;
         }
     }
@@ -163,10 +149,8 @@ public:
         
         int maxVisible = h / LIST_ITEM_H;
         
-        // Resize cache if needed (e.g. first run)
         if (device_cache.size() != maxVisible) {
             device_cache.resize(maxVisible);
-            // Force full clear on resize
             tft->fillRect(x, y, w, h, C_LIST_BG);
         }
         
@@ -174,12 +158,10 @@ public:
             int entryY = y + (i * LIST_ITEM_H);
             int idx = i + scrollOffset;
             
-            // --- EMPTY SLOT HANDLING ---
             if (idx >= devices.size()) {
-                // If this slot was previously occupied, clear it
                 if (!device_cache[i].address.isEmpty()) {
                     tft->fillRect(x, entryY, w, LIST_ITEM_H, C_LIST_BG);
-                    device_cache[i].address = ""; // Mark empty
+                    device_cache[i].address = ""; 
                 }
                 continue;
             }
@@ -190,72 +172,58 @@ public:
             bool fullRedraw = false;
             bool barRedraw = false;
             
-            // 1. Check for Identity Change (Different device or scrolled)
             if (cached.address != dev.address || 
                 cached.name != dev.name ||
                 cached.isVulnerable != dev.isVulnerable || 
+                cached.isPaired != dev.isPaired || 
                 cached.isFastPair != dev.isFastPair ||
                 cached.modelId != dev.modelId) {
                 fullRedraw = true;
             }
-            // 2. Check for RSSI Change Threshold (5dB)
             else if (abs(cached.rssi - dev.rssi) >= 5) {
                 barRedraw = true;
             }
             
-            // --- DRAWING ---
-            
             if (fullRedraw) {
-                // Clear the specific row background
                 tft->fillRect(x, entryY, w, LIST_ITEM_H, C_LIST_BG);
                 tft->drawRect(x, entryY, w, LIST_ITEM_H, C_DIVIDER);
                 
-                // Name
                 tft->setTextColor(C_LIST_TXT, C_LIST_BG);
                 tft->setTextDatum(TL_DATUM);
-                // Add order number to the name: "1. DeviceName"
                 String displayName = String(idx + 1) + ". " + dev.name.substring(0, 15);
                 tft->drawString(displayName, x + 5, entryY + 5, 2);
                 
-                // Address
                 tft->setTextColor(TFT_LIGHTGREY, C_LIST_BG);
                 tft->drawString(dev.address, x + 5, entryY + 25, 1);
                 
-                // Tags
                 int tagX = x + 5;
-                if (dev.isVulnerable) {
+                if (dev.isPaired) {
+                    tft->setTextColor(TFT_WHITE, TFT_DARKGREEN);
+                    tft->drawString(" PAIRED ", tagX, entryY + 38);
+                    tagX += 50;
+                }
+                else if (dev.isVulnerable) {
                     tft->setTextColor(TFT_WHITE, C_VULN);
                     tft->drawString(" VULN ", tagX, entryY + 38);
                     tagX += 40;
                 }
-                // Only show FP tag if NOT aggressive mode (to save space/confusion)
-                // Or modify logic as requested: "instead of adding fastpair devices to the right add the vulnerable to whisperpair in this case"
-                // The VULN tag above handles the vulnerability display. 
-                // The prompt implies filtering list logic which should happen in the main loop, 
-                // but here we just draw what is passed.
                 if (dev.isFastPair) { 
                     tft->setTextColor(TFT_BLACK, TFT_CYAN);
                     tft->drawString(" FP ", tagX, entryY + 38);
-                    tagX += 25; // Bump X for next item
+                    tagX += 25; 
                 }
-
-                // Show Model ID if available
                 if (!dev.modelId.isEmpty()) {
                     tft->setTextColor(TFT_ORANGE, C_LIST_BG);
                     tft->drawString(dev.modelId, tagX, entryY + 38);
                 }
                 
-                // If we redrew the background, we MUST redraw the bar
                 barRedraw = true;
-                
-                // Update cache (RSSI updated in next block)
                 cached = dev;
             }
             
             if (barRedraw) {
                 tft->fillRect(x + w - 35, entryY + 5, 30, 6, C_LIST_BG);
                 
-                // [PATCH] Check Stale (>10s)
                 if (millis() - dev.lastSeen > 10000) {
                     tft->drawRect(x + w - 35, entryY + 5, 30, 6, TFT_DARKGREY);
                 } else {
@@ -269,10 +237,51 @@ public:
         }
     }
 
+    void drawPairingMenu(String deviceName) {
+        tft->fillRect(40, 60, 240, 120, C_LIST_BG);
+        tft->drawRect(40, 60, 240, 120, TFT_WHITE);
+        
+        tft->setTextDatum(MC_DATUM);
+        tft->setTextColor(TFT_WHITE, C_LIST_BG);
+        tft->drawString("Device Vulnerable:", 160, 80, 2);
+        tft->setTextColor(TFT_YELLOW, C_LIST_BG);
+        tft->drawString(deviceName.substring(0, 18), 160, 100, 2);
+
+        // Draw BACK Button
+        tft->fillRoundRect(60, 130, 90, 40, 5, TFT_RED);
+        tft->setTextColor(TFT_WHITE, TFT_RED);
+        tft->drawString("BACK", 105, 150, 2);
+
+        // Draw PAIR Button
+        tft->fillRoundRect(170, 130, 90, 40, 5, TFT_GREEN);
+        tft->setTextColor(TFT_BLACK, TFT_GREEN);
+        tft->drawString("PAIR", 215, 150, 2);
+    }
+
+    void clearMenuOverlay() {
+        tft->fillRect(SPLIT_X, HEAD_H + 1, SCREEN_WIDTH - SPLIT_X, SCREEN_HEIGHT - HEAD_H, C_LIST_BG);
+        drawLogWindow(); 
+        for(auto& dev : device_cache) {
+            dev.address = ""; 
+        }
+    }
+
+    int handleOverlayInput() {
+        if (ts->read_touch_number() == 0) return 0;
+        int p_x = ts->read_touch1_x();
+        int p_y = ts->read_touch1_y();
+        int tx = p_y; int ty = 240 - p_x; 
+
+        if (tx > 60 && tx < 150 && ty > 130 && ty < 170) return 1;
+        if (tx > 170 && tx < 260 && ty > 130 && ty < 170) return 2;
+        
+        return 0;
+    }
+
     // Return codes: -1 (None), 100 (Scan Toggle), 101 (Aggr Toggle), 0-N (List Index), -2 (Up), -3 (Down)
     int handleInput(int totalItems) {
         if (ts->read_touch_number() == 0) {
-            lastTouchY = -1;
+            lastTouchY = -1; // Reset scroll anchor when not touching
             return -1;
         }
 
