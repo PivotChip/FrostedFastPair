@@ -5,9 +5,9 @@ POC for **CVE-2025-36911** WhisperPair vulnerability, allowing you to connect to
 This firmware only performs discovery and vulnerability confirmation and does not implement complete audio listening.
 
 Output on during tests:
-* **Testing Mac:** will use esp own mac and the mac of the device you are test to attempt to pair.
+* **Testing Mac:** will use the ESP's own Mac and the Mac of the device you are testing to attempt to pair.
 * **See if device exposes key if you ask nicely:** Expose Key via Read; Broadcast Key in Ads.
-* **Accept wrong key:** try to send random security key.
+* **Accept wrong key:** try to send a random security key. 
 
 **Tested on Device:** Freenove ESP32-S3 ESP32 S3 Display CYD 2.8 Inch IPS Capacitive Touch Screen 240x320 Pixel
 
@@ -84,6 +84,7 @@ https://codeload.github.com/Freenove/Freenove_ESP32_S3_Display/zip/refs/heads/ma
 
 * **Scanning:** Toggle `SCAN` to populate the list. 
 * **Targeting:** Tap an entry to initiate the WhisperPair test. 
+
 
 
 
