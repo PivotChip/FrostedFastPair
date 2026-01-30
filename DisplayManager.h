@@ -24,6 +24,12 @@
 #define LIST_ITEM_H 60  
 #define LOG_MAX     13
 
+#define btnOffX   5
+#define btnOffY   5
+#define btnOffW   50
+#define btnOffH   30
+
+
 struct DeviceDisplayInfo {
     String address;
     String name;
@@ -91,15 +97,22 @@ public:
         bool timeRefresh = (millis() - lastHeaderDraw > 1000);
 
         if (stateChanged || timeRefresh) {
-            // Draw Scan Button
+            // --- NEW OFF BUTTON ---
+            tft->fillRoundRect(btnOffX, btnOffY, btnOffW, btnOffH, 5, TFT_RED);
+            tft->setTextColor(TFT_WHITE, TFT_RED);
+            tft->setTextDatum(MC_DATUM);
+            tft->drawString("OFF", btnOffX + btnOffW/2, btnOffY + btnOffH/2);
+
+            // --- EXISTING SCAN BUTTON ---
             uint16_t btnColor = isScanning ? TFT_DARKGREEN : C_BTN_ACT;
             String btnText = isScanning ? "SCAN ON" : "SCAN OFF";
+            
             
             tft->fillRoundRect(btnScanX, btnScanY, btnScanW, btnScanH, 5, btnColor);
             tft->setTextColor(TFT_WHITE, btnColor);
             tft->setTextDatum(MC_DATUM);
             tft->drawString(btnText, btnScanX + btnScanW/2, btnScanY + btnScanH/2);
-
+            
             lastScanState = isScanning;
             lastHeaderDraw = millis();
         }
@@ -107,7 +120,7 @@ public:
         // Draw Vuln Counter
         tft->setTextColor(TFT_WHITE, C_HEADER);
         tft->setTextDatum(TL_DATUM);
-        tft->drawString("Vuln Found: " + String(vulnCount), 10, 12, 2);
+        tft->drawString("Vuln: " + String(vulnCount), 65, 12, 2);
     }
 
     void drawLogWindow() {
@@ -281,16 +294,21 @@ public:
     // Return codes: -1 (None), 100 (Scan Toggle), 101 (Aggr Toggle), 0-N (List Index), -2 (Up), -3 (Down)
     int handleInput(int totalItems) {
         if (ts->read_touch_number() == 0) {
-            lastTouchY = -1; // Reset scroll anchor when not touching
+            lastTouchY = -1;
             return -1;
         }
 
         int p_x = ts->read_touch1_x();
         int p_y = ts->read_touch1_y();
-        
         int tx = p_y; 
         int ty = 240 - p_x; 
 
+        // OFF Button Detection (Return code 102)
+        if (tx >= btnOffX - 10 && tx <= btnOffX + btnOffW + 10 && 
+            ty >= btnOffY - 10 && ty <= btnOffY + btnOffH + 10) {
+            return 102;
+        }
+        
         // Scan Button
         if (tx >= btnScanX - 10 && tx <= btnScanX + btnScanW + 10 && 
             ty >= btnScanY - 10 && ty <= btnScanY + btnScanH + 10) {

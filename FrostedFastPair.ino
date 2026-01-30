@@ -113,7 +113,22 @@ void loop() {
     
     int action = display.handleInput((int)deviceCount);
 
-    if (action == 100) {
+    if (action == 102) { // POWER OFF
+        display.log("Powering Off...");
+        delay(1000);
+        
+        // Shut down radios
+        ble.stopScan();
+        NimBLEDevice::deinit(true);
+        
+        // Turn off screen backlight (if applicable to your wiring, common on CYD)
+        digitalWrite(21, LOW); 
+        
+        // Enter Deep Sleep with no wakeup sources
+        // This requires a Reset button press to restart
+        esp_deep_sleep_start();
+    }
+    else if (action == 100) {
         if (ble.isScanning()) {
             ble.stopScan();
             display.log("Scan Stopped.");
